@@ -1,7 +1,8 @@
 <div align="center">
 
-# DirectHunt
+<img src="logo.svg" width="128" height="128" alt="EdgeFetch logo">
 
+# DirectHunt
 
 **A self-hosted download helper that runs entirely on Cloudflare Workers.**
 Direct links, a smart file grabber, a file inspector and export lists for your download manager, all in one dependency-free file.
@@ -206,7 +207,8 @@ When the URL is itself a file, the response is `{ "links": [], "isFile": true, "
 | Route | Purpose |
 | --- | --- |
 | `/` | The web app. |
-| `/manifest.webmanifest`, `/icon.svg` | PWA manifest and icon. |
+| `/manifest.webmanifest` | PWA manifest. |
+| `/icon.svg`, `/icon-192.png`, `/icon-512.png`, `/icon-maskable-512.png`, `/apple-touch-icon.png`, `/favicon.ico` | Logo and icons, embedded in `worker.js` (no static assets needed). |
 
 ## How it works
 
@@ -246,7 +248,7 @@ npx wrangler dev        # run locally
 npx wrangler deploy     # publish
 ```
 
-The whole project is `worker.js`: the UI string comes first, followed by the server code. When editing the UI, remember it lives inside a JavaScript template literal, so avoid backslashes, backticks and `${…}` in the page's script and CSS (build special characters with `String.fromCharCode` instead).
+The whole project is `worker.js` (the logo and PNG icons are embedded in it); `logo.svg` is the editable source of the logo and works well as the repository's social preview image. In `worker.js` the UI string comes first, followed by the server code. When editing the UI, remember it lives inside a JavaScript template literal, so avoid backslashes, backticks and `${…}` in the page's script and CSS (build special characters with `String.fromCharCode` instead).
 
 Contributions are welcome. Please open an issue to discuss larger changes first.
 
