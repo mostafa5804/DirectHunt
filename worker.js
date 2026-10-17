@@ -1,12 +1,13 @@
 /**
- * ULTIMATE DOWNLOADER - V6
+ * ULTIMATE DOWNLOADER - V7
  *
  * UI:      light/dark/auto theme, FA/EN, batch mode, history, installable (PWA) + share target,
  *          category/format filters, include/exclude search, sorting, selection, lazy file sizes,
  *          media/image preview player, export (TXT, aria2, wget, curl, M3U, JSON, CSV).
  * Server:  resumable proxy (Range), inline media streaming, custom Referer / file name,
  *          automatic Referer fallback on 403, redirect-checked fetching (SSRF guard),
- *          HTMLRewriter link extraction (relative URLs, <base>, og:video, JSON in scripts),
+ *          HTMLRewriter link extraction (relative URLs, <base>, og:video, JSON in scripts,
+ *          GitHub release expanded_assets fragments & release anchor tags),
  *          optional deep scan of same-site pages, file inspector.
  *
  * Optional environment variable (Settings > Variables in Cloudflare):
@@ -27,10 +28,11 @@ const CONFIG = {
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
-const FILE_EXTS = ["exe", "msi", "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "apk", "xapk", "ipa", "dmg", "pkg", "deb", "rpm", "appimage", "iso", "img", "bin", "jar", "torrent", "mkv", "mp4", "avi", "mov", "webm", "m4v", "wmv", "flv", "mp3", "wav", "flac", "m4a", "ogg", "opus", "aac", "m3u8", "mpd", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "csv", "txt", "epub", "mobi", "srt", "ass", "ttf", "otf"];
+const FILE_EXTS = ["exe", "msi", "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "apk", "xapk", "ipa", "dmg", "pkg", "deb", "rpm", "appimage", "iso", "img", "bin", "jar", "torrent", "mkv", "mp4", "avi", "mov", "webm", "m4v", "wmv", "flv", "mp3", "wav", "flac", "m4a", "ogg", "opus", "aac", "m3u8", "mpd", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "csv", "txt", "epub", "mobi", "srt", "ass", "ttf", "otf", "sig", "asc", "gpg", "pgp", "sha256", "sha512", "md5"];
 const IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp", "avif", "svg", "bmp", "psd"];
 const FILE_EXT = new RegExp("\\.(" + FILE_EXTS.join("|") + ")$", "i");
 const IMAGE_EXT = new RegExp("\\.(" + IMAGE_EXTS.join("|") + ")$", "i");
+const GH_ASSET = /^\/[^/]+\/[^/]+\/(?:releases\/download\/|archive\/refs\/)/i;
 
 const MIME_BY_EXT = {
     mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", mov: "video/quicktime", mkv: "video/x-matroska",
@@ -1562,7 +1564,7 @@ async function handleProxy(request, params, ctx) {
 }
 
 // --- Link extraction: HTMLRewriter handles relative URLs, <base>, and HTML entities correctly ---
-async function scanPage(pageUrl, ctx, refParam, wantImg) {
+async function scanPage(pageUrl, ctx, refParam, wantImg, followFragments = true) {
     const { res, url } = await fetchWithFallback(pageUrl, { headers: pageHeaders() }, ctx, CONFIG.scanTimeoutMs, refParam);
     if (!res.ok) {
         if (res.body) res.body.cancel().catch(() => {});
@@ -1576,11 +1578,13 @@ async function scanPage(pageUrl, ctx, refParam, wantImg) {
 
     const files = new Set();
     const pages = new Set();
+    const fragments = new Set();
     let base = url.href;
     let title = "";
     let sbuf = "";
 
-    const isFileUrl = (abs) => FILE_EXT.test(abs.pathname) || (wantImg && IMAGE_EXT.test(abs.pathname));
+    const isGhAsset = (abs) => (abs.hostname === "github.com" || abs.hostname === "www.github.com") && GH_ASSET.test(abs.pathname);
+    const isFileUrl = (abs) => FILE_EXT.test(abs.pathname) || (wantImg && IMAGE_EXT.test(abs.pathname)) || isGhAsset(abs);
 
     const resolve = (value, decode = true) => {
         if (!value) return null;
@@ -1617,6 +1621,16 @@ async function scanPage(pageUrl, ctx, refParam, wantImg) {
                 addPage(href);
             }
         })
+        .on("include-fragment", {
+            element(el) {
+                if (!followFragments || fragments.size >= 20) return;
+                const src = el.getAttribute("src") || el.getAttribute("data-deferred-src") || el.getAttribute("data-src");
+                if (src && /\/releases\/expanded_assets\//i.test(src)) {
+                    const abs = resolve(src);
+                    if (abs && abs.origin === url.origin) fragments.add(abs.href);
+                }
+            }
+        })
         .on("link[href], area[href]", { element(el) { addFile(el.getAttribute("href")); } })
         .on("video[src], audio[src], source[src], embed[src]", { element(el) { addFile(el.getAttribute("src")); } })
         .on("meta[property='og:video'], meta[property='og:video:url'], meta[property='og:video:secure_url'], meta[property='og:audio'], meta[name='twitter:player:stream']", {
@@ -1634,6 +1648,18 @@ async function scanPage(pageUrl, ctx, refParam, wantImg) {
     if (wantImg) rw.on("img[src]", { element(el) { addFile(el.getAttribute("src")); } });
 
     await rw.transform(res).arrayBuffer();
+
+    if (followFragments && fragments.size) {
+        const sub = await Promise.allSettled([...fragments].map((f) => scanPage(new URL(f), ctx, refParam, wantImg, false)));
+        for (const r of sub) {
+            if (r.status === "fulfilled" && !r.value.isFile) {
+                for (const f of r.value.files) {
+                    if (files.size < CONFIG.maxLinks) files.add(f);
+                }
+            }
+        }
+    }
+
     return { isFile: false, url: url.href, files: [...files], pages: [...pages], title: title.replace(/\s+/g, " ").trim().slice(0, 200) };
 }
 
@@ -1643,7 +1669,21 @@ async function handleExtract(params, ctx) {
     const deep = params.get("deep") === "1";
     const wantImg = params.get("img") === "1";
 
-    const first = await scanPage(start, ctx, ref, wantImg);
+    let first;
+    const ghRel = /^(?:www\.)?github\.com$/i.test(start.hostname) && /^\/([^/]+\/[^/]+)\/releases\/?$/i.exec(start.pathname);
+    const ghTag = ghRel && start.hash.length > 1 ? safeDecode(start.hash.slice(1).replace(/^release-/i, "")).trim() : "";
+    if (ghTag) {
+        const tagUrl = new URL(start.href);
+        tagUrl.pathname = "/" + ghRel[1] + "/releases/tag/" + ghTag.split("/").map(encodeURIComponent).join("/");
+        tagUrl.hash = "";
+        try {
+            first = await scanPage(tagUrl, ctx, ref, wantImg);
+        } catch (e) {
+            first = await scanPage(start, ctx, ref, wantImg);
+        }
+    } else {
+        first = await scanPage(start, ctx, ref, wantImg);
+    }
     if (first.isFile) return { links: [], isFile: true, url: first.url };
 
     const found = new Set(first.files);
