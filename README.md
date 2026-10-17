@@ -1,6 +1,7 @@
 <div align="center">
 
-# EdgeFetch
+# DirectHunt
+
 
 **A self-hosted download helper that runs entirely on Cloudflare Workers.**
 Direct links, a smart file grabber, a file inspector and export lists for your download manager, all in one dependency-free file.
